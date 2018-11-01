@@ -13,8 +13,11 @@ from keras.models import Sequential
 from keras.layers import Dense
 from keras.layers import Flatten
 from keras.layers import LSTM
-
-
+from keras.layers import RepeatVector
+from keras.layers import TimeDistributed
+from keras.layers.convolutional import Conv1D
+from keras.layers.convolutional import MaxPooling1D
+from ARIMA_NEW import ARIMA_Predict
 # convert history into inputs and outputs
 def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
     n_vars = 1 if type(data) is list else data.shape[1]
@@ -38,22 +41,28 @@ def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
     if dropnan:
         agg.dropna(inplace=True)
     return agg
+
 # train the model
-def build_model(trainX, trainY, n_input):
+def build_model(train_x, train_y, n_input):
 	# define parameters
-	verbose, epochs, batch_size = 2, 100, 16
-	n_timesteps, n_features, n_outputs = trainX.shape[1], trainX.shape[2], trainY.shape[1]
+	verbose, epochs, batch_size = 2, 7, 16
+	n_timesteps, n_features, n_outputs = train_x.shape[1], train_x.shape[2], train_y.shape[1]
+	# reshape output into [samples, timesteps, features]
+	train_y = train_y.reshape((train_y.shape[0], train_y.shape[1], 1))
 	# define model
 	model = Sequential()
-	model.add(LSTM(200, activation='relu', input_shape=(n_timesteps, n_features)))
-	model.add(Dense(100, activation='relu'))
-	model.add(Dense(50, activation='relu'))
-	model.add(Dense(n_outputs))
+	model.add(Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=(n_timesteps,n_features)))
+	model.add(Conv1D(filters=64, kernel_size=3, activation='relu'))
+	model.add(MaxPooling1D(pool_size=2))
+	model.add(Flatten())
+	model.add(RepeatVector(n_outputs))
+	model.add(LSTM(200, activation='relu', return_sequences=True))
+	model.add(TimeDistributed(Dense(100, activation='relu')))
+	model.add(TimeDistributed(Dense(1)))
 	model.compile(loss='mse', optimizer='adam')
 	# fit network
-	model.fit(trainX, trainY, epochs=epochs, batch_size=batch_size, verbose=verbose)
+	model.fit(train_x, train_y, epochs=epochs, batch_size=batch_size, verbose=verbose)
 	return model
-
 # make a forecast
 def forecast(model, history, n_input):
 	# flatten data
@@ -97,13 +106,13 @@ def plot_results(predicted_data, true_data):
     pyplot.legend()
     pyplot.show()
 
+
 if __name__ == "__main__":
 	# l.Load the new file
-	# dataset = read_csv('sp500.csv', header=0, index_col=['trade-date'])
-	dataset = read_csv('WTIF1.csv', header=0, index_col=['trade-date'])
+	dataset = read_csv('sp500.csv', header=0, index_col=['trade-date'])
 	# print('dataset:', dataset.shape)
 	# 2.split into train and test
-	time_step = 3
+	time_step = 7
 	reframed = series_to_supervised(dataset.values, time_step, time_step)
 	values = reframed.values
 	# print('values', values.shape)
@@ -111,7 +120,10 @@ if __name__ == "__main__":
 	train_len = int(len(values) * 0.7)
 	train = values[:train_len, :]
 	test = values[train_len:, :]
-	# 4. reshape data
+    # 4. compute resdate using ARIMA
+    ARIMA_predictions = ARIMA_Predict(train, test, time_step)
+
+	# 5. reshape data
 	train_X, train_Y = train[:, :-time_step], train[:, -time_step:]
 	test_X, test_Y = test[:, :-time_step], test[:, -time_step:]
 
@@ -141,7 +153,8 @@ if __name__ == "__main__":
 		for test_item in test_Y[t]:
 			test_result.append(test_item)
 		t = t + time_step
-
+	save = pd.DataFrame(predictions)
+	save.to_csv('LSTM_step' + str(time_step) + '.csv')
 
 	# 7 plot result
 	plot_results(predict_result, test_result)
@@ -149,16 +162,13 @@ if __name__ == "__main__":
 	print('predictions', len(predict_result))
 	print('test', len(test_result))
 
-	save = pd.DataFrame(predict_result)
-	save.to_csv('LSTM_New_step' + str(time_step) + '.csv')
-
-	# 8.0 calculate RMSE
+	# 16.0 calculate RMSE
 	rmse = sqrt(mean_squared_error(predict_result, test_result))
 	print('Test RMSE: %.3f' % rmse)
-	# 9.1 calculate MSE
+	# 16.1 calculate MSE
 	error = mean_squared_error(predict_result, test_result)
 	print('Test MSE: %.3f' % error)
-	# 10.2  calulate MAE
+	# 16.2  calulate MAE
 	mae = mean_absolute_error(predict_result, test_result)
 	print('Test MAE: %.3f' % mae)
    # pyplot.plot(inv_yhat)
